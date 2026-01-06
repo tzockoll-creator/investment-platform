@@ -1,0 +1,355 @@
+"""
+Investment Platform API
+A comprehensive RESTful API for portfolio management and stock analysis
+"""
+
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Optional
+from datetime import datetime, timedelta
+import yfinance as yf
+from pydantic import BaseModel
+from database import get_db, init_db
+from models import Portfolio, Holding, StockData
+import uvicorn
+
+app = FastAPI(
+    title="Investment Platform API",
+    description="Professional-grade API for portfolio management and stock analysis",
+    version="1.0.0"
+)
+
+# CORS middleware for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ============================================================================
+# REQUEST/RESPONSE MODELS
+# ============================================================================
+
+class HoldingCreate(BaseModel):
+    ticker: str
+    shares: float
+    avg_cost: float
+
+class PortfolioCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class PortfolioResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    total_value: float
+    total_cost: float
+    total_gain_loss: float
+    total_gain_loss_pct: float
+    holdings: List[dict]
+
+class StockQuote(BaseModel):
+    ticker: str
+    current_price: float
+    change: float
+    change_pct: float
+    volume: int
+    market_cap: Optional[float]
+    pe_ratio: Optional[float]
+
+class AnalyticsResponse(BaseModel):
+    sharpe_ratio: Optional[float]
+    volatility: float
+    beta: Optional[float]
+    max_drawdown: float
+    average_return: float
+
+
+# ============================================================================
+# STARTUP/SHUTDOWN
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
+    print("✅ Database initialized")
+
+@app.get("/")
+async def root():
+    """Health check endpoint"""
+    return {
+        "status": "online",
+        "service": "Investment Platform API",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat()
+    }
+
+
+# ============================================================================
+# PORTFOLIO ENDPOINTS
+# ============================================================================
+
+@app.post("/api/portfolios", response_model=dict, status_code=201)
+async def create_portfolio(portfolio: PortfolioCreate, db=Depends(get_db)):
+    """Create a new portfolio"""
+    db_portfolio = Portfolio(
+        name=portfolio.name,
+        description=portfolio.description,
+        created_at=datetime.now()
+    )
+    db.add(db_portfolio)
+    db.commit()
+    db.refresh(db_portfolio)
+    
+    return {
+        "id": db_portfolio.id,
+        "name": db_portfolio.name,
+        "description": db_portfolio.description,
+        "created_at": db_portfolio.created_at.isoformat()
+    }
+
+@app.get("/api/portfolios", response_model=List[dict])
+async def get_portfolios(db=Depends(get_db)):
+    """Get all portfolios"""
+    portfolios = db.query(Portfolio).all()
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "created_at": p.created_at.isoformat()
+        }
+        for p in portfolios
+    ]
+
+@app.get("/api/portfolios/{portfolio_id}", response_model=PortfolioResponse)
+async def get_portfolio(portfolio_id: int, db=Depends(get_db)):
+    """Get detailed portfolio information with current valuations"""
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
+    
+    # Calculate current values
+    holdings_data = []
+    total_value = 0
+    total_cost = 0
+    
+    for holding in holdings:
+        # Fetch current price
+        current_price = get_current_price(holding.ticker)
+        current_value = holding.shares * current_price
+        cost_basis = holding.shares * holding.avg_cost
+        gain_loss = current_value - cost_basis
+        gain_loss_pct = (gain_loss / cost_basis * 100) if cost_basis > 0 else 0
+        
+        holdings_data.append({
+            "id": holding.id,
+            "ticker": holding.ticker,
+            "shares": holding.shares,
+            "avg_cost": holding.avg_cost,
+            "current_price": current_price,
+            "current_value": current_value,
+            "cost_basis": cost_basis,
+            "gain_loss": gain_loss,
+            "gain_loss_pct": gain_loss_pct
+        })
+        
+        total_value += current_value
+        total_cost += cost_basis
+    
+    total_gain_loss = total_value - total_cost
+    total_gain_loss_pct = (total_gain_loss / total_cost * 100) if total_cost > 0 else 0
+    
+    return PortfolioResponse(
+        id=portfolio.id,
+        name=portfolio.name,
+        description=portfolio.description,
+        total_value=total_value,
+        total_cost=total_cost,
+        total_gain_loss=total_gain_loss,
+        total_gain_loss_pct=total_gain_loss_pct,
+        holdings=holdings_data
+    )
+
+@app.delete("/api/portfolios/{portfolio_id}", status_code=204)
+async def delete_portfolio(portfolio_id: int, db=Depends(get_db)):
+    """Delete a portfolio and all its holdings"""
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    # Delete all holdings first
+    db.query(Holding).filter(Holding.portfolio_id == portfolio_id).delete()
+    db.delete(portfolio)
+    db.commit()
+    
+    return None
+
+
+# ============================================================================
+# HOLDINGS ENDPOINTS
+# ============================================================================
+
+@app.post("/api/portfolios/{portfolio_id}/holdings", status_code=201)
+async def add_holding(
+    portfolio_id: int,
+    holding: HoldingCreate,
+    db=Depends(get_db)
+):
+    """Add a holding to a portfolio"""
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    # Validate ticker
+    try:
+        ticker_data = yf.Ticker(holding.ticker)
+        info = ticker_data.info
+        if not info:
+            raise HTTPException(status_code=400, detail=f"Invalid ticker: {holding.ticker}")
+    except:
+        raise HTTPException(status_code=400, detail=f"Could not validate ticker: {holding.ticker}")
+    
+    db_holding = Holding(
+        portfolio_id=portfolio_id,
+        ticker=holding.ticker.upper(),
+        shares=holding.shares,
+        avg_cost=holding.avg_cost,
+        added_at=datetime.now()
+    )
+    db.add(db_holding)
+    db.commit()
+    db.refresh(db_holding)
+    
+    return {
+        "id": db_holding.id,
+        "ticker": db_holding.ticker,
+        "shares": db_holding.shares,
+        "avg_cost": db_holding.avg_cost
+    }
+
+@app.delete("/api/holdings/{holding_id}", status_code=204)
+async def delete_holding(holding_id: int, db=Depends(get_db)):
+    """Delete a specific holding"""
+    holding = db.query(Holding).filter(Holding.id == holding_id).first()
+    if not holding:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    
+    db.delete(holding)
+    db.commit()
+    return None
+
+
+# ============================================================================
+# STOCK DATA ENDPOINTS
+# ============================================================================
+
+@app.get("/api/stocks/{ticker}/quote", response_model=StockQuote)
+async def get_stock_quote(ticker: str):
+    """Get current quote for a stock"""
+    try:
+        stock = yf.Ticker(ticker.upper())
+        info = stock.info
+        
+        current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+        previous_close = info.get('previousClose', current_price)
+        change = current_price - previous_close
+        change_pct = (change / previous_close * 100) if previous_close > 0 else 0
+        
+        return StockQuote(
+            ticker=ticker.upper(),
+            current_price=current_price,
+            change=change,
+            change_pct=change_pct,
+            volume=info.get('volume', 0),
+            market_cap=info.get('marketCap'),
+            pe_ratio=info.get('trailingPE')
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Could not fetch data for {ticker}: {str(e)}")
+
+@app.get("/api/stocks/{ticker}/history")
+async def get_stock_history(
+    ticker: str,
+    period: str = "1mo",
+    interval: str = "1d"
+):
+    """Get historical price data for a stock"""
+    try:
+        stock = yf.Ticker(ticker.upper())
+        hist = stock.history(period=period, interval=interval)
+        
+        if hist.empty:
+            raise HTTPException(status_code=404, detail=f"No data found for {ticker}")
+        
+        data = []
+        for date, row in hist.iterrows():
+            data.append({
+                "date": date.isoformat(),
+                "open": float(row['Open']),
+                "high": float(row['High']),
+                "low": float(row['Low']),
+                "close": float(row['Close']),
+                "volume": int(row['Volume'])
+            })
+        
+        return {
+            "ticker": ticker.upper(),
+            "period": period,
+            "interval": interval,
+            "data": data
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching history: {str(e)}")
+
+
+# ============================================================================
+# ANALYTICS ENDPOINTS
+# ============================================================================
+
+@app.get("/api/portfolios/{portfolio_id}/analytics", response_model=AnalyticsResponse)
+async def get_portfolio_analytics(portfolio_id: int, db=Depends(get_db)):
+    """Calculate advanced analytics for a portfolio"""
+    from analytics import calculate_portfolio_metrics
+    
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+    
+    holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
+    if not holdings:
+        raise HTTPException(status_code=400, detail="Portfolio has no holdings")
+    
+    metrics = calculate_portfolio_metrics(holdings)
+    return AnalyticsResponse(**metrics)
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def get_current_price(ticker: str) -> float:
+    """Fetch current price for a ticker"""
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        return info.get('currentPrice') or info.get('regularMarketPrice', 0)
+    except:
+        return 0.0
+
+
+# ============================================================================
+# RUN SERVER
+# ============================================================================
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
