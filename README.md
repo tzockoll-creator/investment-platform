@@ -25,54 +25,84 @@ A professional full-stack investment analysis platform combining portfolio manag
 - **Technical Indicators**: Moving averages (MA), RSI, MACD for stocks
 - **Correlation Matrix**: Diversification analysis across holdings
 
-### Phase 3: Frontend Dashboard (Coming Soon) 🚧
-- React + TypeScript
-- Interactive charts with Recharts
-- Real-time updates
-- Portfolio visualization
+### Phase 3: Frontend Dashboard ✅
+- **React + TypeScript**: Modern, type-safe frontend
+- **Interactive Charts**: Recharts for beautiful visualizations
+- **Real-time Updates**: Auto-refresh every 30 seconds
+- **Portfolio Management**: Create, view, delete portfolios
+- **Holdings Management**: Add/remove positions
+- **Sector Visualization**: Pie chart showing allocation
+- **Performance Comparison**: Bar charts vs benchmarks
+- **Responsive Design**: Works on desktop and mobile
 
-### Phase 4: Deployment (Coming Soon) 🚧
-- Docker containerization
-- CI/CD pipeline
-- Cloud deployment (AWS/GCP/Azure)
+### Phase 4: Deployment ✅
+- **Docker Containerization**: Multi-stage builds for production
+- **Docker Compose**: Orchestration for local/production deployment
+- **CI/CD Pipeline**: GitHub Actions for automated testing and deployment
+- **Cloud Ready**: Configurations for AWS ECS, GCP Cloud Run, Azure
+- **Health Checks**: Built-in monitoring endpoints
+- **Production Optimized**: Nginx serving, gzip compression, caching
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- Python 3.9+
-- pip
+### Option 1: Docker (Recommended)
 
-### Installation
+**Prerequisites**: Docker and Docker Compose
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/investment-platform.git
-cd investment-platform/backend
+git clone https://github.com/tzockoll-creator/investment-platform.git
+cd investment-platform
+
+# Start all services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+```
+
+Services will be available at:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
+
+### Option 2: Manual Setup
+
+**Prerequisites**: Python 3.9+, Node.js 18+
+
+#### Backend Setup
+```bash
+cd backend
 
 # Create virtual environment
 python -m venv venv
-
-# Activate virtual environment
-# Windows:
-venv\Scripts\activate
-# Mac/Linux:
-source venv/bin/activate
+source venv/bin/activate  # Mac/Linux
+# OR: venv\Scripts\activate  # Windows
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the API server
+# Run the server
 python main.py
 ```
 
-The API will be available at `http://localhost:8000`
+#### Frontend Setup
+```bash
+cd frontend
 
-### API Documentation
-Once running, visit:
-- **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+Services will be available at:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
 
 ---
 
@@ -181,17 +211,40 @@ investment-platform/
 │   ├── main.py              # FastAPI application & routes
 │   ├── models.py            # SQLAlchemy database models
 │   ├── database.py          # Database configuration
-│   ├── analytics.py         # Portfolio metrics calculations
-│   └── requirements.txt     # Python dependencies
-├── frontend/                # React app (Phase 3)
+│   ├── analytics.py         # Portfolio metrics & indicators
+│   ├── requirements.txt     # Python dependencies
+│   └── Dockerfile           # Backend container config
+├── frontend/
+│   ├── src/
+│   │   ├── components/      # React components
+│   │   ├── hooks/           # Custom React hooks
+│   │   ├── services/        # API service layer
+│   │   ├── types/           # TypeScript interfaces
+│   │   ├── App.tsx          # Main application
+│   │   └── main.tsx         # Entry point
+│   ├── package.json         # Node dependencies
+│   ├── vite.config.ts       # Vite configuration
+│   ├── Dockerfile           # Frontend container config
+│   └── nginx.conf           # Nginx configuration
+├── deploy/
+│   ├── docker-compose.prod.yml
+│   ├── aws-ecs-task-definition.json
+│   └── README.md            # Deployment guide
+├── .github/workflows/
+│   ├── ci-cd.yml            # Main CI/CD pipeline
+│   └── docker-compose-test.yml
+├── docker-compose.yml       # Local development
 └── README.md
 ```
 
 ### Tech Stack
-- **Backend**: FastAPI, SQLAlchemy, yfinance
+- **Backend**: FastAPI, SQLAlchemy, yfinance, NumPy
+- **Frontend**: React, TypeScript, Recharts, Axios
+- **Build Tools**: Vite, ESLint
 - **Database**: SQLite (dev) → PostgreSQL (prod)
-- **API**: RESTful with OpenAPI/Swagger docs
-- **Analytics**: NumPy for calculations
+- **Deployment**: Docker, Docker Compose, Nginx
+- **CI/CD**: GitHub Actions
+- **Cloud**: AWS ECS, GCP Cloud Run, Azure (ready)
 
 ---
 
@@ -245,28 +298,74 @@ export DATABASE_URL="postgresql://user:password@localhost:5432/investment_db"
 
 ## 🧪 Testing
 
+### Backend Tests
 ```bash
-# Install test dependencies
+cd backend
 pip install pytest httpx
-
-# Run tests (coming soon)
-pytest
+python test_api.py
 ```
+
+### Frontend Tests
+```bash
+cd frontend
+npm run lint
+npm run build
+```
+
+### Docker Tests
+```bash
+# Test docker-compose setup
+docker-compose up -d
+curl http://localhost:8000/
+curl http://localhost:3000/
+docker-compose down
+```
+
+### CI/CD
+GitHub Actions automatically runs:
+- Backend syntax checks
+- Frontend linting and build
+- Docker Compose integration tests
+- Image builds and pushes (on main branch)
 
 ---
 
 ## 🚀 Deployment
 
-### Docker (Coming Soon)
+### Docker Compose (Simplest)
 ```bash
-docker build -t investment-platform .
-docker run -p 8000:8000 investment-platform
+# Development
+docker-compose up -d
+
+# Production
+docker-compose -f deploy/docker-compose.prod.yml up -d
 ```
 
 ### Cloud Deployment
-- AWS: Elastic Beanstalk / ECS
-- GCP: Cloud Run / App Engine
-- Azure: App Service
+
+#### AWS ECS/Fargate
+```bash
+# Build and push images
+docker build -t <account>.dkr.ecr.us-east-1.amazonaws.com/backend backend/
+docker push <account>.dkr.ecr.us-east-1.amazonaws.com/backend
+
+# Deploy using task definition
+aws ecs register-task-definition --cli-input-json file://deploy/aws-ecs-task-definition.json
+```
+
+#### Google Cloud Run
+```bash
+gcloud run deploy backend --image gcr.io/<project>/backend --platform managed
+gcloud run deploy frontend --image gcr.io/<project>/frontend --platform managed
+```
+
+#### Azure Container Instances
+```bash
+az container create --resource-group myRG --name investment-platform \
+  --image myregistry.azurecr.io/investment-platform:latest
+```
+
+See [deploy/README.md](deploy/README.md) for detailed deployment guides.
 
 ---
 
@@ -279,14 +378,19 @@ docker run -p 8000:8000 investment-platform
 - [x] Phase 2: Technical indicators (MA, RSI, MACD)
 - [x] Phase 2: Performance benchmarking vs S&P 500
 - [x] Phase 2: Correlation matrix for diversification
-- [ ] Phase 3: React frontend
-- [ ] Phase 3: Interactive charts
-- [ ] Phase 3: Real-time updates
-- [ ] Phase 4: Docker deployment
-- [ ] Phase 4: CI/CD pipeline
-- [ ] Additional: User authentication
+- [x] Phase 3: React + TypeScript frontend
+- [x] Phase 3: Interactive charts with Recharts
+- [x] Phase 3: Real-time updates (30s refresh)
+- [x] Phase 3: Portfolio & holdings management UI
+- [x] Phase 4: Docker containerization
+- [x] Phase 4: Docker Compose orchestration
+- [x] Phase 4: CI/CD pipeline with GitHub Actions
+- [x] Phase 4: Multi-cloud deployment configurations
+- [ ] Additional: User authentication & authorization
 - [ ] Additional: Multi-currency support
 - [ ] Additional: Cryptocurrency tracking
+- [ ] Additional: Email alerts for portfolio changes
+- [ ] Additional: Export reports (PDF/Excel)
 
 ---
 
