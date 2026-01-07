@@ -208,14 +208,14 @@ async def add_holding(
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
     
-    # Validate ticker
+    # Validate ticker (lenient - allows adding even if validation fails)
     try:
         ticker_data = yf.Ticker(holding.ticker)
         info = ticker_data.info
-        if not info:
-            raise HTTPException(status_code=400, detail=f"Invalid ticker: {holding.ticker}")
-    except:
-        raise HTTPException(status_code=400, detail=f"Could not validate ticker: {holding.ticker}")
+        if not info or len(info) == 0:
+            print(f"Warning: Could not validate ticker {holding.ticker}, but allowing it anyway")
+    except Exception as e:
+        print(f"Warning: Ticker validation failed for {holding.ticker}: {str(e)}, but allowing it anyway")
     
     db_holding = Holding(
         portfolio_id=portfolio_id,
