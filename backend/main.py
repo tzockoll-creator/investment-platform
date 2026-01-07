@@ -320,17 +320,103 @@ async def get_stock_history(
 async def get_portfolio_analytics(portfolio_id: int, db=Depends(get_db)):
     """Calculate advanced analytics for a portfolio"""
     from analytics import calculate_portfolio_metrics
-    
+
     portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
     if not portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    
+
     holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
     if not holdings:
         raise HTTPException(status_code=400, detail="Portfolio has no holdings")
-    
+
     metrics = calculate_portfolio_metrics(holdings)
     return AnalyticsResponse(**metrics)
+
+
+# ============================================================================
+# PHASE 2: DATA ANALYSIS ENDPOINTS
+# ============================================================================
+
+@app.get("/api/portfolios/{portfolio_id}/sectors")
+async def get_sector_allocation(portfolio_id: int, db=Depends(get_db)):
+    """Get sector allocation analysis for a portfolio"""
+    from analytics import calculate_sector_allocation
+
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
+    if not holdings:
+        raise HTTPException(status_code=400, detail="Portfolio has no holdings")
+
+    sector_data = calculate_sector_allocation(holdings)
+    return {
+        "portfolio_id": portfolio_id,
+        "sectors": sector_data
+    }
+
+@app.get("/api/portfolios/{portfolio_id}/benchmark")
+async def get_performance_benchmark(
+    portfolio_id: int,
+    benchmark: str = "SPY",
+    db=Depends(get_db)
+):
+    """Compare portfolio performance against a benchmark (default: S&P 500)"""
+    from analytics import calculate_performance_benchmark
+
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
+    if not holdings:
+        raise HTTPException(status_code=400, detail="Portfolio has no holdings")
+
+    benchmark_data = calculate_performance_benchmark(holdings, benchmark)
+
+    if "error" in benchmark_data:
+        raise HTTPException(status_code=500, detail=benchmark_data["error"])
+
+    return {
+        "portfolio_id": portfolio_id,
+        "benchmark_data": benchmark_data
+    }
+
+@app.get("/api/portfolios/{portfolio_id}/correlation")
+async def get_correlation_matrix(portfolio_id: int, db=Depends(get_db)):
+    """Get correlation matrix for portfolio holdings (diversification analysis)"""
+    from analytics import calculate_correlation_matrix
+
+    portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
+    if not portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
+
+    holdings = db.query(Holding).filter(Holding.portfolio_id == portfolio_id).all()
+    if not holdings:
+        raise HTTPException(status_code=400, detail="Portfolio has no holdings")
+
+    correlation_data = calculate_correlation_matrix(holdings)
+
+    if "error" in correlation_data:
+        raise HTTPException(status_code=400, detail=correlation_data["error"])
+
+    return {
+        "portfolio_id": portfolio_id,
+        "correlation_matrix": correlation_data
+    }
+
+@app.get("/api/stocks/{ticker}/indicators")
+async def get_technical_indicators(ticker: str, period: str = "6mo"):
+    """Get technical indicators for a stock (MA, RSI, MACD)"""
+    from analytics import calculate_technical_indicators
+
+    indicators = calculate_technical_indicators(ticker, period)
+
+    if "error" in indicators:
+        raise HTTPException(status_code=404, detail=indicators["error"])
+
+    return indicators
 
 
 # ============================================================================

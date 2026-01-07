@@ -19,11 +19,11 @@ A professional full-stack investment analysis platform combining portfolio manag
 - **Database**: SQLAlchemy ORM with SQLite (production-ready for PostgreSQL)
 - **API Documentation**: Auto-generated with Swagger UI
 
-### Phase 2: Data Analysis (Coming Soon) 🚧
-- Sector allocation analysis
-- Performance benchmarking
-- Technical indicators (MA, RSI, MACD)
-- Correlation matrix for diversification
+### Phase 2: Data Analysis ✅
+- **Sector Allocation**: Portfolio breakdown by industry sectors
+- **Performance Benchmarking**: Compare against S&P 500 or custom benchmarks
+- **Technical Indicators**: Moving averages (MA), RSI, MACD for stocks
+- **Correlation Matrix**: Diversification analysis across holdings
 
 ### Phase 3: Frontend Dashboard (Coming Soon) 🚧
 - React + TypeScript
@@ -105,7 +105,11 @@ Once running, visit:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/portfolios/{id}/analytics` | Get portfolio analytics |
+| GET | `/api/portfolios/{id}/analytics` | Get portfolio analytics (Sharpe, Beta, etc.) |
+| GET | `/api/portfolios/{id}/sectors` | Get sector allocation breakdown |
+| GET | `/api/portfolios/{id}/benchmark` | Compare performance vs benchmark |
+| GET | `/api/portfolios/{id}/correlation` | Get correlation matrix for holdings |
+| GET | `/api/stocks/{ticker}/indicators` | Get technical indicators (MA, RSI, MACD) |
 
 ---
 
@@ -145,6 +149,26 @@ curl "http://localhost:8000/api/stocks/AAPL/quote"
 ### Get Analytics
 ```bash
 curl "http://localhost:8000/api/portfolios/1/analytics"
+```
+
+### Get Sector Allocation (Phase 2)
+```bash
+curl "http://localhost:8000/api/portfolios/1/sectors"
+```
+
+### Compare Performance vs S&P 500 (Phase 2)
+```bash
+curl "http://localhost:8000/api/portfolios/1/benchmark"
+```
+
+### Get Correlation Matrix (Phase 2)
+```bash
+curl "http://localhost:8000/api/portfolios/1/correlation"
+```
+
+### Get Technical Indicators (Phase 2)
+```bash
+curl "http://localhost:8000/api/stocks/AAPL/indicators?period=6mo"
 ```
 
 ---
@@ -251,9 +275,10 @@ docker run -p 8000:8000 investment-platform
 - [x] Phase 1: Backend API with portfolio management
 - [x] Phase 1: Real-time market data integration
 - [x] Phase 1: Advanced analytics (Sharpe, Beta, etc.)
-- [ ] Phase 2: Sector analysis
-- [ ] Phase 2: Technical indicators
-- [ ] Phase 2: Performance benchmarking
+- [x] Phase 2: Sector allocation analysis
+- [x] Phase 2: Technical indicators (MA, RSI, MACD)
+- [x] Phase 2: Performance benchmarking vs S&P 500
+- [x] Phase 2: Correlation matrix for diversification
 - [ ] Phase 3: React frontend
 - [ ] Phase 3: Interactive charts
 - [ ] Phase 3: Real-time updates
