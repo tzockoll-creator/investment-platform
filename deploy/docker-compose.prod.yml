@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ${DOCKER_USERNAME}/investment-platform-backend:latest
+    container_name: investment-platform-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./portfolio.db}
+    volumes:
+      - backend-data:/app/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    image: ${DOCKER_USERNAME}/investment-platform-frontend:latest
+    container_name: investment-platform-frontend
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  backend-data:
+    driver: local
+
+networks:
+  default:
+    name: investment-platform-network
