@@ -22,17 +22,18 @@ _last_request_time = {}
 _request_lock = Lock()
 
 # Rate limiting: minimum delay between requests (in seconds)
-MIN_REQUEST_DELAY = 0.5
+MIN_REQUEST_DELAY = 2.0  # Increased from 0.5 to 2 seconds
 
 
-def _get_cached_or_fetch_api(cache_key: str, fetch_func, cache_duration: int = 300):
+def _get_cached_or_fetch_api(cache_key: str, fetch_func, cache_duration: int = 300, max_retries: int = 3):
     """
-    Get data from cache or fetch if expired/missing
+    Get data from cache or fetch if expired/missing with retry logic
 
     Args:
         cache_key: Unique key for cache entry
         fetch_func: Function to call if cache miss
         cache_duration: Cache duration in seconds (default: 5 minutes)
+        max_retries: Maximum number of retry attempts (default: 3)
     """
     with _cache_lock:
         now = time.time()
@@ -41,7 +42,7 @@ def _get_cached_or_fetch_api(cache_key: str, fetch_func, cache_duration: int = 3
         if cache_key in _api_cache:
             cached_data, cached_time = _api_cache[cache_key]
             if now - cached_time < cache_duration:
-                print(f"Cache hit for {cache_key}")
+                print(f"✓ Cache hit for {cache_key}")
                 return cached_data
 
     # Rate limiting: wait if needed
@@ -49,28 +50,52 @@ def _get_cached_or_fetch_api(cache_key: str, fetch_func, cache_duration: int = 3
         if cache_key in _last_request_time:
             elapsed = time.time() - _last_request_time[cache_key]
             if elapsed < MIN_REQUEST_DELAY:
-                time.sleep(MIN_REQUEST_DELAY - elapsed)
+                wait_time = MIN_REQUEST_DELAY - elapsed
+                print(f"⏳ Rate limiting: waiting {wait_time:.2f}s before next request")
+                time.sleep(wait_time)
 
         _last_request_time[cache_key] = time.time()
 
-    # Fetch new data
-    try:
-        print(f"Cache miss for {cache_key} - fetching from API")
-        data = fetch_func()
+    # Fetch new data with retry logic
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            print(f"🔍 Cache miss for {cache_key} - fetching from API (attempt {attempt + 1}/{max_retries})")
+            data = fetch_func()
 
-        # Cache the result
-        with _cache_lock:
-            _api_cache[cache_key] = (data, time.time())
+            # Cache the result
+            with _cache_lock:
+                _api_cache[cache_key] = (data, time.time())
 
-        return data
-    except Exception as e:
-        # If fetch fails, return stale cache if available
-        with _cache_lock:
-            if cache_key in _api_cache:
-                print(f"Warning: Using stale cache for {cache_key} due to error: {e}")
-                cached_data, _ = _api_cache[cache_key]
-                return cached_data
-        raise
+            print(f"✓ Successfully fetched and cached {cache_key}")
+            return data
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            print(f"⚠️  Attempt {attempt + 1} failed for {cache_key}: {error_msg}")
+
+            # If rate limited (429), wait longer before retry
+            if "429" in error_msg or "Too Many Requests" in error_msg:
+                backoff_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                print(f"⏳ Rate limited - backing off for {backoff_time}s")
+                time.sleep(backoff_time)
+            elif attempt < max_retries - 1:
+                # Exponential backoff for other errors
+                backoff_time = 2 ** attempt
+                print(f"⏳ Retrying in {backoff_time}s...")
+                time.sleep(backoff_time)
+
+    # All retries failed - try stale cache
+    with _cache_lock:
+        if cache_key in _api_cache:
+            print(f"⚠️  All retries failed for {cache_key}, using stale cache")
+            cached_data, cached_time = _api_cache[cache_key]
+            age_minutes = (time.time() - cached_time) / 60
+            print(f"📦 Using {age_minutes:.1f} minute old cached data")
+            return cached_data
+
+    print(f"❌ Failed to fetch {cache_key} and no cache available")
+    raise last_error
 
 app = FastAPI(
     title="Investment Platform API",
@@ -489,18 +514,43 @@ async def get_technical_indicators(ticker: str, period: str = "6mo"):
 # ============================================================================
 
 def get_current_price(ticker: str) -> float:
-    """Fetch current price for a ticker"""
+    """
+    Fetch current price for a ticker
+    Uses multiple fallback methods to improve reliability
+    """
     try:
         cache_key = f"stock_price_{ticker.upper()}"
 
         def fetch_price():
             stock = yf.Ticker(ticker)
-            info = stock.info
-            return info.get('currentPrice') or info.get('regularMarketPrice', 0)
+
+            # Method 1: Try historical data (last close price) - more reliable
+            try:
+                hist = stock.history(period="1d")
+                if not hist.empty:
+                    price = float(hist['Close'].iloc[-1])
+                    if price > 0:
+                        print(f"💰 Got price for {ticker} from history: ${price}")
+                        return price
+            except Exception as e:
+                print(f"⚠️  History method failed for {ticker}: {e}")
+
+            # Method 2: Try info API as fallback
+            try:
+                info = stock.info
+                price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
+                if price > 0:
+                    print(f"💰 Got price for {ticker} from info: ${price}")
+                    return price
+            except Exception as e:
+                print(f"⚠️  Info method failed for {ticker}: {e}")
+
+            return 0.0
 
         # Use cache with 2 minute expiration
         return _get_cached_or_fetch_api(cache_key, fetch_price, cache_duration=120)
-    except:
+    except Exception as e:
+        print(f"❌ All methods failed to get price for {ticker}: {e}")
         return 0.0
 
 

@@ -19,17 +19,18 @@ _last_request_time = {}
 _request_lock = Lock()
 
 # Rate limiting: minimum delay between requests (in seconds)
-MIN_REQUEST_DELAY = 0.5
+MIN_REQUEST_DELAY = 2.0  # Increased from 0.5 to 2 seconds
 
 
-def _get_cached_or_fetch(cache_key: str, fetch_func, cache_duration: int = 300):
+def _get_cached_or_fetch(cache_key: str, fetch_func, cache_duration: int = 300, max_retries: int = 3):
     """
-    Get data from cache or fetch if expired/missing
+    Get data from cache or fetch if expired/missing with retry logic
 
     Args:
         cache_key: Unique key for cache entry
         fetch_func: Function to call if cache miss
         cache_duration: Cache duration in seconds (default: 5 minutes)
+        max_retries: Maximum number of retry attempts (default: 3)
     """
     with _cache_lock:
         now = time.time()
@@ -49,23 +50,38 @@ def _get_cached_or_fetch(cache_key: str, fetch_func, cache_duration: int = 300):
 
         _last_request_time[cache_key] = time.time()
 
-    # Fetch new data
-    try:
-        data = fetch_func()
+    # Fetch new data with retry logic
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            data = fetch_func()
 
-        # Cache the result
-        with _cache_lock:
-            _cache[cache_key] = (data, time.time())
+            # Cache the result
+            with _cache_lock:
+                _cache[cache_key] = (data, time.time())
 
-        return data
-    except Exception as e:
-        # If fetch fails, return stale cache if available
-        with _cache_lock:
-            if cache_key in _cache:
-                print(f"Warning: Using stale cache for {cache_key} due to error: {e}")
-                cached_data, _ = _cache[cache_key]
-                return cached_data
-        raise
+            return data
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+
+            # If rate limited (429), wait longer before retry
+            if "429" in error_msg or "Too Many Requests" in error_msg:
+                backoff_time = (attempt + 1) * 5  # 5, 10, 15 seconds
+                print(f"⏳ Rate limited - backing off for {backoff_time}s")
+                time.sleep(backoff_time)
+            elif attempt < max_retries - 1:
+                # Exponential backoff for other errors
+                backoff_time = 2 ** attempt
+                time.sleep(backoff_time)
+
+    # All retries failed - try stale cache
+    with _cache_lock:
+        if cache_key in _cache:
+            print(f"Warning: Using stale cache for {cache_key} due to error: {last_error}")
+            cached_data, _ = _cache[cache_key]
+            return cached_data
+    raise last_error
 
 
 def calculate_portfolio_metrics(holdings: List[Holding]) -> Dict:
