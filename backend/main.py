@@ -12,6 +12,65 @@ from pydantic import BaseModel
 from database import get_db, init_db
 from models import Portfolio, Holding, StockData
 import uvicorn
+import time
+from threading import Lock
+
+# Cache for stock data to reduce API calls
+_api_cache = {}
+_cache_lock = Lock()
+_last_request_time = {}
+_request_lock = Lock()
+
+# Rate limiting: minimum delay between requests (in seconds)
+MIN_REQUEST_DELAY = 0.5
+
+
+def _get_cached_or_fetch_api(cache_key: str, fetch_func, cache_duration: int = 300):
+    """
+    Get data from cache or fetch if expired/missing
+
+    Args:
+        cache_key: Unique key for cache entry
+        fetch_func: Function to call if cache miss
+        cache_duration: Cache duration in seconds (default: 5 minutes)
+    """
+    with _cache_lock:
+        now = time.time()
+
+        # Check if cached and not expired
+        if cache_key in _api_cache:
+            cached_data, cached_time = _api_cache[cache_key]
+            if now - cached_time < cache_duration:
+                print(f"Cache hit for {cache_key}")
+                return cached_data
+
+    # Rate limiting: wait if needed
+    with _request_lock:
+        if cache_key in _last_request_time:
+            elapsed = time.time() - _last_request_time[cache_key]
+            if elapsed < MIN_REQUEST_DELAY:
+                time.sleep(MIN_REQUEST_DELAY - elapsed)
+
+        _last_request_time[cache_key] = time.time()
+
+    # Fetch new data
+    try:
+        print(f"Cache miss for {cache_key} - fetching from API")
+        data = fetch_func()
+
+        # Cache the result
+        with _cache_lock:
+            _api_cache[cache_key] = (data, time.time())
+
+        return data
+    except Exception as e:
+        # If fetch fails, return stale cache if available
+        with _cache_lock:
+            if cache_key in _api_cache:
+                print(f"Warning: Using stale cache for {cache_key} due to error: {e}")
+                cached_data, _ = _api_cache[cache_key]
+                return cached_data
+        raise
 
 app = FastAPI(
     title="Investment Platform API",
@@ -255,14 +314,20 @@ async def delete_holding(holding_id: int, db=Depends(get_db)):
 async def get_stock_quote(ticker: str):
     """Get current quote for a stock"""
     try:
-        stock = yf.Ticker(ticker.upper())
-        info = stock.info
-        
+        cache_key = f"stock_quote_{ticker.upper()}"
+
+        def fetch_quote():
+            stock = yf.Ticker(ticker.upper())
+            return stock.info
+
+        # Use cache with 2 minute expiration for quotes
+        info = _get_cached_or_fetch_api(cache_key, fetch_quote, cache_duration=120)
+
         current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
         previous_close = info.get('previousClose', current_price)
         change = current_price - previous_close
         change_pct = (change / previous_close * 100) if previous_close > 0 else 0
-        
+
         return StockQuote(
             ticker=ticker.upper(),
             current_price=current_price,
@@ -426,9 +491,15 @@ async def get_technical_indicators(ticker: str, period: str = "6mo"):
 def get_current_price(ticker: str) -> float:
     """Fetch current price for a ticker"""
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return info.get('currentPrice') or info.get('regularMarketPrice', 0)
+        cache_key = f"stock_price_{ticker.upper()}"
+
+        def fetch_price():
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            return info.get('currentPrice') or info.get('regularMarketPrice', 0)
+
+        # Use cache with 2 minute expiration
+        return _get_cached_or_fetch_api(cache_key, fetch_price, cache_duration=120)
     except:
         return 0.0
 

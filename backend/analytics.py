@@ -8,6 +8,64 @@ import yfinance as yf
 from datetime import datetime, timedelta
 from typing import List, Dict
 from models import Holding
+import time
+from functools import lru_cache
+from threading import Lock
+
+# Cache for stock data to reduce API calls
+_cache = {}
+_cache_lock = Lock()
+_last_request_time = {}
+_request_lock = Lock()
+
+# Rate limiting: minimum delay between requests (in seconds)
+MIN_REQUEST_DELAY = 0.5
+
+
+def _get_cached_or_fetch(cache_key: str, fetch_func, cache_duration: int = 300):
+    """
+    Get data from cache or fetch if expired/missing
+
+    Args:
+        cache_key: Unique key for cache entry
+        fetch_func: Function to call if cache miss
+        cache_duration: Cache duration in seconds (default: 5 minutes)
+    """
+    with _cache_lock:
+        now = time.time()
+
+        # Check if cached and not expired
+        if cache_key in _cache:
+            cached_data, cached_time = _cache[cache_key]
+            if now - cached_time < cache_duration:
+                return cached_data
+
+    # Rate limiting: wait if needed
+    with _request_lock:
+        if cache_key in _last_request_time:
+            elapsed = time.time() - _last_request_time[cache_key]
+            if elapsed < MIN_REQUEST_DELAY:
+                time.sleep(MIN_REQUEST_DELAY - elapsed)
+
+        _last_request_time[cache_key] = time.time()
+
+    # Fetch new data
+    try:
+        data = fetch_func()
+
+        # Cache the result
+        with _cache_lock:
+            _cache[cache_key] = (data, time.time())
+
+        return data
+    except Exception as e:
+        # If fetch fails, return stale cache if available
+        with _cache_lock:
+            if cache_key in _cache:
+                print(f"Warning: Using stale cache for {cache_key} due to error: {e}")
+                cached_data, _ = _cache[cache_key]
+                return cached_data
+        raise
 
 
 def calculate_portfolio_metrics(holdings: List[Holding]) -> Dict:
@@ -263,8 +321,14 @@ def calculate_sector_allocation(holdings: List[Holding]) -> Dict:
 
     for holding in holdings:
         try:
-            stock = yf.Ticker(holding.ticker)
-            info = stock.info
+            cache_key = f"stock_info_{holding.ticker}"
+
+            def fetch_info():
+                stock = yf.Ticker(holding.ticker)
+                return stock.info
+
+            # Use cache with 5 minute expiration
+            info = _get_cached_or_fetch(cache_key, fetch_info, cache_duration=300)
 
             # Get current price and sector
             current_price = info.get('currentPrice') or info.get('regularMarketPrice', 0)
